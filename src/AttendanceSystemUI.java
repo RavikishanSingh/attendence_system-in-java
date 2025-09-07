@@ -1,11 +1,15 @@
 
 import com.formdev.flatlaf.themes.FlatMacLightLaf;
 
+// JCalendar (com.toedter) imports are now REMOVED
 import javax.swing.*;
 import javax.swing.border.Border;
 import javax.swing.border.EmptyBorder;
+import javax.swing.event.TableModelEvent;
+import javax.swing.event.TableModelListener;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableCellEditor;
 import javax.swing.table.TableModel;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
@@ -22,8 +26,10 @@ import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
+import java.awt.Point;
 import java.awt.RenderingHints;
 import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener; // Specific import
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.BufferedWriter;
@@ -32,20 +38,23 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.LocalDate;
+import java.time.DayOfWeek; // NEW import for calendar logic
+import java.time.LocalDate; // NEW import for calendar logic
+import java.time.YearMonth; // NEW import for calendar logic
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.format.TextStyle; // NEW import for calendar logic
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale; // NEW import for calendar logic
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.apache.poi.ss.usermodel.Cell;
@@ -56,17 +65,14 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 
 public class AttendanceSystemUI {
 
-    // --- Centralized List of Subjects ---
     public static final String[] SUBJECT_LIST = {"General", "Math", "Physics", "Chemistry", "History", "English", "Biology"};
     private static final DateTimeFormatter GLOBAL_DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
 
     // --- Main Entry Point ---
     public static void main(String[] args) {
-        // Use a modern macOS-inspired light theme
         FlatMacLightLaf.setup();
 
-        // Global UI tweaks for a more modern look
-        UIManager.put("Button.arc", 999); // Fully rounded buttons
+        UIManager.put("Button.arc", 999);
         UIManager.put("Component.arc", 12);
         UIManager.put("ProgressBar.arc", 12);
         UIManager.put("TextComponent.arc", 8);
@@ -75,6 +81,9 @@ public class AttendanceSystemUI {
         UIManager.put("TableHeader.height", 40);
         UIManager.put("TableHeader.background", new Color(245, 248, 251));
         UIManager.put("TableHeader.separatorColor", new Color(230, 230, 230));
+        UIManager.put("Component.arrowType", "triangle");
+        UIManager.put("Component.focusWidth", 1);
+        UIManager.put("Component.focusColor", AppStyles.PRIMARY_COLOR);
 
         ExcelDataManager.setupDatabase();
 
@@ -94,6 +103,7 @@ public class AttendanceSystemUI {
         public static final Color SECONDARY_TEXT_COLOR = new Color(134, 142, 150);
         public static final Color GREEN = new Color(39, 174, 96);
         public static final Color RED = new Color(231, 76, 60);
+        public static final Color ORANGE = new Color(243, 156, 18);
         public static final Color BORDER_COLOR = new Color(222, 226, 230);
         public static final Color TABLE_ALT_ROW_COLOR = new Color(250, 251, 253);
 
@@ -109,7 +119,7 @@ public class AttendanceSystemUI {
         String id, password, name, role, subject;
 
         User(String id, String password, String name, String role) {
-            this(id, password, name, role, ""); // Default subject to empty string
+            this(id, password, name, role, "");
         }
 
         User(String id, String password, String name, String role, String subject) {
@@ -157,16 +167,13 @@ public class AttendanceSystemUI {
             setupContentPanels();
             add(contentPanel, BorderLayout.CENTER);
 
-            // NEW: Updated Login routing
             switch (currentUser.role) {
                 case "Admin":
                 case "Staff":
-                    // Admin and Staff now land on the new Home Dashboard
                     sideNavPanel.setActive("Dashboard");
                     showPanel("HomeDashboard");
                     break;
                 case "Student":
-                    // Student still lands on their personal dashboard
                     sideNavPanel.setActive("Dashboard");
                     showPanel("StudentDashboard");
                     break;
@@ -174,21 +181,23 @@ public class AttendanceSystemUI {
         }
 
         private void setupContentPanels() {
-            contentPanel.add(new HomeDashboardPanel(this), "HomeDashboard"); // NEW: Admin/Staff Dashboard
+            contentPanel.add(new HomeDashboardPanel(this), "HomeDashboard");
             contentPanel.add(new StaffAttendancePanel(this), "Staff");
             contentPanel.add(new AdminPanel(this), "Admin");
-            contentPanel.add(new StudentDashboardPanel(this), "StudentDashboard"); // Renamed key
-            contentPanel.add(new ReportsPanel(this), "Reports");
+            contentPanel.add(new StudentDashboardPanel(this), "StudentDashboard");
+
+            if ("Admin".equals(currentUser.role)) {
+                contentPanel.add(new AdminReportsPanel(this), "Reports");
+            } else if ("Staff".equals(currentUser.role)) {
+                contentPanel.add(new StaffReportsPanel(this), "Reports");
+            }
         }
 
         public void showPanel(String panelName) {
             cardLayout.show(contentPanel, panelName);
-            Component[] components = contentPanel.getComponents();
-            for (Component component : components) {
-                // Match class simple name OR the card layout key
+            for (Component component : contentPanel.getComponents()) {
                 String compName = component.getClass().getSimpleName();
-                if ((compName.equals(panelName) || compName.equals(panelName + "Panel"))
-                        && component.isVisible()) {
+                if ((compName.equals(panelName) || compName.equals(panelName + "Panel")) && component.isVisible()) {
                     if (component instanceof Refreshable) {
                         ((Refreshable) component).refreshData();
                     }
@@ -213,18 +222,15 @@ public class AttendanceSystemUI {
             setLayout(new GridLayout(1, 2));
             setResizable(false);
 
-            // Left Panel (Branding)
             JPanel brandPanel = new JPanel(new GridBagLayout());
             brandPanel.setBackground(AppStyles.PRIMARY_COLOR);
             GridBagConstraints gbcBrand = new GridBagConstraints();
             gbcBrand.insets = new Insets(10, 10, 10, 10);
-
             JLabel brandIcon = new JLabel("🎓");
             brandIcon.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 120));
             brandIcon.setForeground(Color.WHITE.darker());
             gbcBrand.gridy = 0;
             brandPanel.add(brandIcon, gbcBrand);
-
             JLabel brandTitle = new JLabel("<html><div style='text-align: center;'>College<br>Attendance<br>System</div></html>");
             brandTitle.setFont(new Font("Inter", Font.BOLD, 48));
             brandTitle.setForeground(Color.WHITE);
@@ -232,39 +238,33 @@ public class AttendanceSystemUI {
             brandPanel.add(brandTitle, gbcBrand);
             add(brandPanel);
 
-            // Right Panel (Form)
             JPanel formPanel = new JPanel(new GridBagLayout());
             formPanel.setBackground(Color.WHITE);
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(10, 25, 10, 25);
             gbc.gridwidth = 1;
             gbc.fill = GridBagConstraints.HORIZONTAL;
-
             JLabel title = new JLabel("Welcome Back!");
             title.setFont(AppStyles.FONT_HEADER);
             gbc.gridx = 0;
             gbc.gridy = 0;
             gbc.weightx = 1.0;
             formPanel.add(title, gbc);
-
             JLabel subtitle = new JLabel("Please enter your details to sign in.");
             subtitle.setFont(AppStyles.FONT_NORMAL);
             subtitle.setForeground(AppStyles.SECONDARY_TEXT_COLOR);
             gbc.gridy = 1;
             gbc.insets = new Insets(0, 25, 20, 25);
             formPanel.add(subtitle, gbc);
-
             JTextField usernameField = new JTextField(20);
             JPasswordField passwordField = new JPasswordField(20);
             setupTextField(usernameField, "Full Name");
             setupTextField(passwordField, "Password");
-
             gbc.gridy = 2;
             gbc.insets = new Insets(10, 25, 10, 25);
             formPanel.add(usernameField, gbc);
             gbc.gridy = 3;
             formPanel.add(passwordField, gbc);
-
             JButton loginButton = new JButton("Login");
             loginButton.setBackground(AppStyles.PRIMARY_COLOR);
             loginButton.setForeground(Color.WHITE);
@@ -273,7 +273,6 @@ public class AttendanceSystemUI {
             gbc.gridy = 4;
             gbc.insets = new Insets(20, 25, 10, 25);
             formPanel.add(loginButton, gbc);
-
             loginButton.addActionListener(e -> performLogin(usernameField.getText(), new String(passwordField.getPassword())));
             add(formPanel);
         }
@@ -298,7 +297,7 @@ public class AttendanceSystemUI {
         }
     }
 
-    // --- Improved Side Navigation Panel (Now with Dashboard) ---
+    // --- Improved Side Navigation Panel ---
     static class SideNavPanel extends JPanel {
 
         private final MainFrame mainFrame;
@@ -311,13 +310,11 @@ public class AttendanceSystemUI {
             setPreferredSize(new Dimension(240, 0));
             setBackground(AppStyles.SIDENAV_COLOR);
             setBorder(BorderFactory.createMatteBorder(0, 0, 0, 1, AppStyles.BORDER_COLOR));
-
             JLabel titleLabel = new JLabel("ATTENDANCE SYS", SwingConstants.CENTER);
             titleLabel.setFont(new Font("Inter", Font.BOLD, 20));
             titleLabel.setForeground(AppStyles.PRIMARY_TEXT_COLOR);
             titleLabel.setBorder(new EmptyBorder(25, 10, 25, 10));
             add(titleLabel, BorderLayout.NORTH);
-
             buttonsPanel.setLayout(new GridLayout(0, 1, 0, 15));
             buttonsPanel.setOpaque(false);
             buttonsPanel.setBorder(new EmptyBorder(15, 15, 15, 15));
@@ -326,7 +323,7 @@ public class AttendanceSystemUI {
             switch (role) {
                 case "Admin":
                     addNavButton("🏠", "Dashboard", "HomeDashboard");
-                    addNavButton("👤", "Students", "Admin"); // This panel is now just for management
+                    addNavButton("👤", "Students", "Admin");
                     addNavButton("📄", "Reports", "Reports");
                     break;
                 case "Staff":
@@ -338,9 +335,7 @@ public class AttendanceSystemUI {
                     addNavButton("📊", "Dashboard", "StudentDashboard");
                     break;
             }
-
             add(buttonsPanel, BorderLayout.CENTER);
-
             JButton logoutButton = new JButton("Logout");
             logoutButton.setFont(AppStyles.FONT_BOLD);
             logoutButton.putClientProperty("JButton.buttonType", "roundRect");
@@ -363,7 +358,6 @@ public class AttendanceSystemUI {
             button.setBorder(new EmptyBorder(12, 25, 12, 25));
             button.setCursor(new Cursor(Cursor.HAND_CURSOR));
             setInactiveStyle(button);
-
             button.addActionListener(e -> {
                 setActive(text);
                 mainFrame.showPanel(panelName);
@@ -395,7 +389,7 @@ public class AttendanceSystemUI {
         }
     }
 
-    // --- Reusable UI Components with Modern Styling ---
+    // --- Reusable UI Components ---
     static class CustomComponents {
 
         public static JPanel createCardPanel() {
@@ -403,35 +397,27 @@ public class AttendanceSystemUI {
             card.setBackground(Color.WHITE);
             card.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createLineBorder(AppStyles.BORDER_COLOR, 1, true),
-                    new EmptyBorder(15, 15, 15, 15)
-            ));
+                    new EmptyBorder(15, 15, 15, 15)));
             return card;
         }
 
         public static JPanel createStatCard(String title, String value, String icon, Color color) {
             JPanel card = createCardPanel();
             card.setLayout(new BorderLayout(15, 0));
-
             JLabel iconLabel = new JLabel(icon);
             iconLabel.setFont(new Font("Segoe UI Symbol", Font.PLAIN, 32));
             iconLabel.setForeground(color);
             iconLabel.setVerticalAlignment(SwingConstants.CENTER);
             card.add(iconLabel, BorderLayout.WEST);
-
-            JPanel textPanel = new JPanel();
+            JPanel textPanel = new JPanel(new GridLayout(2, 1));
             textPanel.setOpaque(false);
-            textPanel.setLayout(new BoxLayout(textPanel, BoxLayout.Y_AXIS));
-
             JLabel valueLabel = new JLabel(value);
             valueLabel.setFont(new Font("Inter", Font.BOLD, 26));
             valueLabel.setForeground(AppStyles.PRIMARY_TEXT_COLOR);
-
             JLabel titleLabel = new JLabel(title);
             titleLabel.setFont(AppStyles.FONT_SMALL);
             titleLabel.setForeground(AppStyles.SECONDARY_TEXT_COLOR);
-
             textPanel.add(valueLabel);
-            textPanel.add(Box.createRigidArea(new Dimension(0, 5)));
             textPanel.add(titleLabel);
             card.add(textPanel, BorderLayout.CENTER);
             return card;
@@ -441,17 +427,15 @@ public class AttendanceSystemUI {
 
             @Override
             public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-                Component c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
+                super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column);
                 if (value == null) {
-                    return c;
+                    return this;
                 }
-
                 JPanel panel = new JPanel(new FlowLayout(FlowLayout.CENTER, 8, 0));
                 JLabel label = new JLabel(value.toString());
                 label.setFont(new Font("Inter", Font.BOLD, 12));
                 label.setBorder(new EmptyBorder(6, 18, 6, 18));
                 label.setOpaque(true);
-
                 if ("Present".equals(value)) {
                     label.setBackground(new Color(230, 245, 237));
                     label.setForeground(AppStyles.GREEN.darker());
@@ -463,10 +447,8 @@ public class AttendanceSystemUI {
                     label.setForeground(AppStyles.PRIMARY_TEXT_COLOR);
                     label.setBorder(null);
                 }
-
                 panel.add(label);
                 panel.setOpaque(true);
-
                 if (isSelected) {
                     panel.setBackground(table.getSelectionBackground());
                 } else {
@@ -476,7 +458,6 @@ public class AttendanceSystemUI {
                         label.setBackground(bg);
                     }
                 }
-
                 return panel;
             }
         }
@@ -512,7 +493,6 @@ public class AttendanceSystemUI {
             table.setSelectionForeground(Color.WHITE);
             table.getTableHeader().setFont(AppStyles.FONT_BOLD);
             table.getTableHeader().setForeground(AppStyles.SECONDARY_TEXT_COLOR);
-
             table.setDefaultRenderer(Object.class, new DefaultTableCellRenderer() {
                 @Override
                 public Component getTableCellRendererComponent(JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
@@ -533,122 +513,95 @@ public class AttendanceSystemUI {
         void refreshData();
     }
 
-    // --- NEW: Admin/Staff Home Dashboard Panel ---
+    // --- Admin/Staff Home Dashboard Panel ---
     static class HomeDashboardPanel extends JPanel implements Refreshable {
 
-        private final MainFrame mainFrame;
         private final User currentUser;
-        // MODIFIED: Grid layout is now 1 row, 4 columns
         private final JPanel statsPanel = new JPanel(new GridLayout(1, 4, 20, 20));
-        private final JLabel titleLabel;
 
         HomeDashboardPanel(MainFrame frame) {
-            this.mainFrame = frame;
             this.currentUser = frame.getCurrentUser();
-
             setLayout(new BorderLayout(20, 20));
             setBorder(new EmptyBorder(25, 25, 25, 25));
             setBackground(AppStyles.BACKGROUND_COLOR);
-
-            titleLabel = new JLabel("Welcome, " + currentUser.name);
+            JLabel titleLabel = new JLabel("Welcome, " + currentUser.name);
             titleLabel.setFont(AppStyles.FONT_HEADER);
             add(titleLabel, BorderLayout.NORTH);
-
             statsPanel.setOpaque(false);
-
             JPanel centerMessage = new JPanel(new GridBagLayout());
             centerMessage.setOpaque(false);
             JLabel message = new JLabel("<html><div style='text-align: center;'>Select an option from the menu on the left to get started.</div></html>");
             message.setFont(AppStyles.FONT_NORMAL);
             message.setForeground(AppStyles.SECONDARY_TEXT_COLOR);
             centerMessage.add(message);
-
             JPanel centerPanel = new JPanel(new BorderLayout(20, 20));
             centerPanel.setOpaque(false);
             centerPanel.add(statsPanel, BorderLayout.NORTH);
             centerPanel.add(centerMessage, BorderLayout.CENTER);
-
             add(centerPanel, BorderLayout.CENTER);
-
             refreshData();
         }
 
         @Override
         public void refreshData() {
             statsPanel.removeAll();
-
             if ("Admin".equals(currentUser.role)) {
                 List<User> students = ExcelDataManager.getUsersByRole("Student");
                 List<User> staff = ExcelDataManager.getUsersByRole("Staff");
                 Map<String, Double> todayStats = ExcelDataManager.getOverallAttendanceForToday();
-
                 statsPanel.add(CustomComponents.createStatCard("Total Students", String.valueOf(students.size()), "🎓", AppStyles.PRIMARY_COLOR));
-                statsPanel.add(CustomComponents.createStatCard("Total Staff", String.valueOf(staff.size()), "👤", Color.ORANGE));
-                // NEW: Added Total Lectures card
+                statsPanel.add(CustomComponents.createStatCard("Total Staff", String.valueOf(staff.size()), "👤", AppStyles.ORANGE));
                 statsPanel.add(CustomComponents.createStatCard("Total Lectures Today", String.valueOf(todayStats.get("total").intValue()), "📚", AppStyles.GREEN));
                 statsPanel.add(CustomComponents.createStatCard("Overall Absent Today", String.valueOf(todayStats.get("absent").intValue()), "❌", AppStyles.RED));
-
             } else if ("Staff".equals(currentUser.role)) {
                 Map<String, Double> subjectStats = ExcelDataManager.getOverallAttendanceForToday(currentUser.subject);
-
                 statsPanel.add(CustomComponents.createStatCard("My Assigned Subject", currentUser.subject, "📚", AppStyles.PRIMARY_COLOR));
                 statsPanel.add(CustomComponents.createStatCard("Att. % (My Subject)", String.format("%.0f%%", subjectStats.get("percentage")), "📈", AppStyles.GREEN));
-                // NEW: Added Total Lectures card
-                statsPanel.add(CustomComponents.createStatCard("Total Lectures (My Subject)", String.valueOf(subjectStats.get("total").intValue()), "✍️", Color.ORANGE));
+                statsPanel.add(CustomComponents.createStatCard("Total Lectures (My Subject)", String.valueOf(subjectStats.get("total").intValue()), "✍️", AppStyles.ORANGE));
                 statsPanel.add(CustomComponents.createStatCard("Absent (My Subject)", String.valueOf(subjectStats.get("absent").intValue()), "❌", AppStyles.RED));
             }
-
             statsPanel.revalidate();
             statsPanel.repaint();
         }
     }
 
-    // --- Staff View Panel ---
+    // --- Staff View Panel (WITH NEW CALENDAR) ---
     static class StaffAttendancePanel extends JPanel implements Refreshable {
 
         private final DefaultTableModel tableModel;
         private final JPanel statsPanel = new JPanel(new GridLayout(1, 4, 20, 20));
-        private final JTextField dateField;
+        private final ModernDatePickerButton datePickerButton; // NEW
         private final String assignedSubject;
-        private final JLabel subjectLabel;
 
         StaffAttendancePanel(MainFrame frame) {
             this.assignedSubject = frame.getCurrentUser().subject;
-
             setLayout(new BorderLayout(20, 20));
             setBorder(new EmptyBorder(25, 25, 25, 25));
             setBackground(AppStyles.BACKGROUND_COLOR);
-
             JPanel headerPanel = new JPanel(new BorderLayout());
             headerPanel.setOpaque(false);
             JLabel title = new JLabel("Attendance Manager");
             title.setFont(AppStyles.FONT_HEADER);
             headerPanel.add(title, BorderLayout.WEST);
             add(headerPanel, BorderLayout.NORTH);
-
             statsPanel.setOpaque(false);
-
             JPanel mainContent = CustomComponents.createCardPanel();
             mainContent.setLayout(new BorderLayout(15, 15));
             mainContent.setBorder(new EmptyBorder(15, 15, 15, 15));
-
             JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
             toolbar.setOpaque(false);
-
             toolbar.add(new JLabel("Date:"));
-            dateField = new JTextField(LocalDate.now().format(GLOBAL_DATE_FORMATTER), 12);
-            dateField.putClientProperty("JTextField.placeholderText", "yyyy-MM-dd");
-            toolbar.add(dateField);
 
-            subjectLabel = new JLabel("Subject: " + this.assignedSubject);
+            datePickerButton = new ModernDatePickerButton(frame); // NEW
+            toolbar.add(datePickerButton);
+
+            JLabel subjectLabel = new JLabel("Subject: " + this.assignedSubject);
             subjectLabel.setFont(AppStyles.FONT_BOLD);
             toolbar.add(subjectLabel);
-
             JButton loadButton = new JButton("Load Roster");
             loadButton.setFont(AppStyles.FONT_BOLD);
             loadButton.addActionListener(e -> loadRosterForAssignedSubject());
             toolbar.add(loadButton);
-
             mainContent.add(toolbar, BorderLayout.NORTH);
 
             String[] columns = {"Roll No.", "Name", "Status"};
@@ -662,20 +615,16 @@ public class AttendanceSystemUI {
             table.getColumnModel().getColumn(2).setCellRenderer(new CustomComponents.StatusCellRenderer());
             table.getColumnModel().getColumn(0).setPreferredWidth(50);
             table.getColumnModel().getColumn(1).setPreferredWidth(200);
-
             table.addMouseListener(new MouseAdapter() {
                 public void mouseClicked(MouseEvent e) {
-                    int row = table.rowAtPoint(e.getPoint());
-                    int col = table.columnAtPoint(e.getPoint());
+                    int row = table.rowAtPoint(e.getPoint()), col = table.columnAtPoint(e.getPoint());
                     if (row >= 0 && col == 2) {
-                        String currentStatus = (String) tableModel.getValueAt(row, 2);
-                        String newStatus = "Present".equals(currentStatus) ? "Absent" : "Present";
+                        String newStatus = "Present".equals(tableModel.getValueAt(row, 2)) ? "Absent" : "Present";
                         tableModel.setValueAt(newStatus, row, 2);
                         updateStats();
                     }
                 }
             });
-
             JScrollPane scrollPane = new JScrollPane(table);
             scrollPane.getViewport().setBackground(Color.WHITE);
             scrollPane.setBorder(BorderFactory.createLineBorder(AppStyles.BORDER_COLOR));
@@ -692,7 +641,6 @@ public class AttendanceSystemUI {
             actionsPanel.add(markAllPresent);
             actionsPanel.add(markAllAbsent);
             actionsPanel.add(saveButton);
-
             mainContent.add(actionsPanel, BorderLayout.SOUTH);
 
             markAllPresent.addActionListener(e -> setAllStatus("Present"));
@@ -704,20 +652,23 @@ public class AttendanceSystemUI {
             centerPanel.add(statsPanel, BorderLayout.NORTH);
             centerPanel.add(mainContent, BorderLayout.CENTER);
             add(centerPanel, BorderLayout.CENTER);
-
             refreshData();
         }
 
+        private String getSelectedDateString() {
+            LocalDate selectedDate = datePickerButton.getSelectedDate();
+            if (selectedDate == null) {
+                JOptionPane.showMessageDialog(this, "Please select a valid date.", "Date Error", JOptionPane.ERROR_MESSAGE);
+                return null;
+            }
+            return selectedDate.format(GLOBAL_DATE_FORMATTER);
+        }
+
         private void loadRosterForAssignedSubject() {
-            String dateStr;
-            try {
-                LocalDate.parse(dateField.getText(), GLOBAL_DATE_FORMATTER);
-                dateStr = dateField.getText();
-            } catch (DateTimeParseException e) {
-                JOptionPane.showMessageDialog(this, "Invalid date format. Please use yyyy-MM-dd.", "Date Error", JOptionPane.ERROR_MESSAGE);
+            String dateStr = getSelectedDateString();
+            if (dateStr == null) {
                 return;
             }
-
             tableModel.setRowCount(0);
             List<User> students = ExcelDataManager.getUsersByRole("Student");
             for (User student : students) {
@@ -729,7 +680,7 @@ public class AttendanceSystemUI {
 
         @Override
         public void refreshData() {
-            dateField.setText(LocalDate.now().format(GLOBAL_DATE_FORMATTER));
+            datePickerButton.setSelectedDate(LocalDate.now()); // Set calendar to today
             loadRosterForAssignedSubject();
         }
 
@@ -740,15 +691,15 @@ public class AttendanceSystemUI {
                     present++;
                 } else {
                     absent++;
+
                 }
             }
             int total = tableModel.getRowCount();
             double percentage = (total == 0) ? 100.0 : ((double) present / total) * 100;
-
             statsPanel.removeAll();
             statsPanel.add(CustomComponents.createStatCard("Present", String.valueOf(present), "✅", AppStyles.GREEN));
             statsPanel.add(CustomComponents.createStatCard("Absent", String.valueOf(absent), "❌", AppStyles.RED));
-            statsPanel.add(CustomComponents.createStatCard("Total Roster", String.valueOf(total), "🎓", Color.ORANGE));
+            statsPanel.add(CustomComponents.createStatCard("Total Roster", String.valueOf(total), "🎓", AppStyles.ORANGE));
             statsPanel.add(CustomComponents.createStatCard("Attendance %", String.format("%.0f%%", percentage), "📈", AppStyles.PRIMARY_COLOR));
             statsPanel.revalidate();
             statsPanel.repaint();
@@ -762,29 +713,16 @@ public class AttendanceSystemUI {
         }
 
         private void submitAttendance(ActionEvent e) {
-            String dateStr;
-            try {
-                LocalDate.parse(dateField.getText(), GLOBAL_DATE_FORMATTER);
-                dateStr = dateField.getText();
-            } catch (DateTimeParseException ex) {
-                JOptionPane.showMessageDialog(this, "Invalid date format. Cannot save.", "Date Error", JOptionPane.ERROR_MESSAGE);
+            String dateStr = getSelectedDateString();
+            if (dateStr == null) {
                 return;
             }
-
             List<AttendanceRecord> records = new ArrayList<>();
             for (int i = 0; i < tableModel.getRowCount(); i++) {
-                records.add(new AttendanceRecord(
-                        (String) tableModel.getValueAt(i, 0),
-                        dateStr,
-                        (String) tableModel.getValueAt(i, 2),
-                        this.assignedSubject
-                ));
+                records.add(new AttendanceRecord((String) tableModel.getValueAt(i, 0), dateStr, (String) tableModel.getValueAt(i, 2), this.assignedSubject));
             }
-
             if (ExcelDataManager.hasAttendanceBeenMarked(dateStr, this.assignedSubject)) {
-                int choice = JOptionPane.showConfirmDialog(this,
-                        "Overwrite attendance for '" + this.assignedSubject + "' on " + dateStr + "?",
-                        "Confirm Overwrite", JOptionPane.YES_NO_OPTION);
+                int choice = JOptionPane.showConfirmDialog(this, "Overwrite attendance for '" + this.assignedSubject + "' on " + dateStr + "?", "Confirm Overwrite", JOptionPane.YES_NO_OPTION);
                 if (choice == JOptionPane.NO_OPTION) {
                     return;
                 }
@@ -794,21 +732,20 @@ public class AttendanceSystemUI {
         }
     }
 
-    // --- Admin Panel (NOW WITH PASSWORD RESET) ---
+    // --- Admin Panel (WITH EDITABLE STATUS COLUMN) ---
     static class AdminPanel extends JPanel implements Refreshable {
 
         private final JTable studentTable, staffTable, reportTable;
         private final DefaultTableModel studentModel, staffModel, reportModel;
+        private boolean isUpdatingByCode = false; // NEW: Flag to prevent event loops
 
         AdminPanel(MainFrame frame) {
             setLayout(new BorderLayout(20, 20));
             setBorder(new EmptyBorder(25, 25, 25, 25));
             setBackground(AppStyles.BACKGROUND_COLOR);
-
             JLabel title = new JLabel("Admin Management");
             title.setFont(AppStyles.FONT_HEADER);
             add(title, BorderLayout.NORTH);
-
             JTabbedPane tabbedPane = new JTabbedPane();
             tabbedPane.setFont(AppStyles.FONT_BOLD);
 
@@ -830,11 +767,39 @@ public class AttendanceSystemUI {
             staffTable = CustomComponents.createModernTable(staffModel);
             tabbedPane.addTab("Manage Staff", createManagementPanel(staffTable, "Staff", frame, this::refreshData));
 
-            reportModel = new DefaultTableModel(new String[]{"Student ID", "Name", "Date", "Subject", "Status"}, 0);
+            reportModel = new DefaultTableModel(new String[]{"Student ID", "Name", "Date", "Subject", "Status"}, 0) {
+                @Override
+                public boolean isCellEditable(int row, int column) {
+                    return column == 4;
+                } // Only Status (col 4) is editable
+            };
             reportTable = CustomComponents.createModernTable(reportModel);
-            reportTable.getColumnModel().getColumn(4).setCellRenderer(new CustomComponents.StatusCellRenderer());
-            tabbedPane.addTab("Raw Attendance Data", new JScrollPane(reportTable));
 
+            JComboBox<String> statusComboBox = new JComboBox<>(new String[]{"Present", "Absent"});
+            statusComboBox.setFont(AppStyles.FONT_NORMAL);
+            DefaultCellEditor statusEditor = new DefaultCellEditor(statusComboBox);
+            reportTable.getColumnModel().getColumn(4).setCellEditor(statusEditor);
+            reportTable.getColumnModel().getColumn(4).setCellRenderer(new CustomComponents.StatusCellRenderer());
+
+            reportModel.addTableModelListener(e -> {
+                if (isUpdatingByCode || e.getType() != TableModelEvent.UPDATE) {
+                    return; // Prevent loop
+                }
+                int row = e.getFirstRow(), col = e.getColumn();
+                if (col == 4) { // Status column was changed
+                    String studentId = (String) reportModel.getValueAt(row, 0);
+                    String date = (String) reportModel.getValueAt(row, 2);
+                    String subject = (String) reportModel.getValueAt(row, 3);
+                    String newStatus = (String) reportModel.getValueAt(row, 4);
+
+                    new Thread(() -> { // Run Excel save on a background thread
+                        ExcelDataManager.updateSingleAttendanceRecord(studentId, date, subject, newStatus);
+                        SwingUtilities.invokeLater(() -> System.out.println("Updated record for " + studentId + " on " + date));
+                    }).start();
+                }
+            });
+
+            tabbedPane.addTab("Raw Attendance Data (Editable Status)", new JScrollPane(reportTable));
             add(tabbedPane, BorderLayout.CENTER);
             refreshData();
         }
@@ -842,28 +807,23 @@ public class AttendanceSystemUI {
         private JPanel createManagementPanel(JTable table, String role, Frame owner, Runnable refreshCallback) {
             JPanel panel = new JPanel(new BorderLayout(10, 10));
             panel.add(new JScrollPane(table), BorderLayout.CENTER);
-
             JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
             JButton addButton = new JButton("➕ Add New " + role);
             JButton removeButton = new JButton("❌ Remove Selected");
-            JButton setPasswordButton = new JButton("🔑 Set Password"); // NEW BUTTON
-
+            JButton setPasswordButton = new JButton("🔑 Set Password");
             addButton.setFont(AppStyles.FONT_BOLD);
             removeButton.setFont(AppStyles.FONT_BOLD);
             setPasswordButton.setFont(AppStyles.FONT_BOLD);
-
             addButton.setBackground(AppStyles.GREEN);
             addButton.setForeground(Color.WHITE);
-            setPasswordButton.setBackground(Color.ORANGE);
-
+            setPasswordButton.setBackground(AppStyles.ORANGE);
             addButton.addActionListener(e -> new AddUserDialog(owner, role, refreshCallback).setVisible(true));
-
             removeButton.addActionListener(e -> {
                 int selectedRow = table.getSelectedRow();
                 if (selectedRow != -1) {
                     String id = (String) table.getModel().getValueAt(table.convertRowIndexToModel(selectedRow), 0);
                     String name = (String) table.getModel().getValueAt(table.convertRowIndexToModel(selectedRow), 1);
-                    int confirm = JOptionPane.showConfirmDialog(this, "Are you sure you want to remove user: " + name + " (ID: " + id + ")?", "Confirm Deletion", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                    int confirm = JOptionPane.showConfirmDialog(this, "Remove user: " + name + " (ID: " + id + ")?", "Confirm Deletion", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
                     if (confirm == JOptionPane.YES_OPTION) {
                         ExcelDataManager.removeUser(id);
                         refreshCallback.run();
@@ -872,15 +832,12 @@ public class AttendanceSystemUI {
                     JOptionPane.showMessageDialog(this, "Please select a user to remove.", "Warning", JOptionPane.WARNING_MESSAGE);
                 }
             });
-
             setPasswordButton.addActionListener(e -> {
                 int selectedRow = table.getSelectedRow();
                 if (selectedRow != -1) {
                     String id = (String) table.getModel().getValueAt(table.convertRowIndexToModel(selectedRow), 0);
                     String name = (String) table.getModel().getValueAt(table.convertRowIndexToModel(selectedRow), 1);
-
                     String newPassword = JOptionPane.showInputDialog(this, "Enter new password for " + name + " (ID: " + id + "):", "Set New Password", JOptionPane.PLAIN_MESSAGE);
-
                     if (newPassword != null && !newPassword.trim().isEmpty()) {
                         ExcelDataManager.updatePassword(id, newPassword.trim());
                         JOptionPane.showMessageDialog(this, "Password for " + name + " updated successfully.", "Success", JOptionPane.INFORMATION_MESSAGE);
@@ -891,7 +848,6 @@ public class AttendanceSystemUI {
                     JOptionPane.showMessageDialog(this, "Please select a user to update.", "Warning", JOptionPane.WARNING_MESSAGE);
                 }
             });
-
             buttonPanel.add(addButton);
             buttonPanel.add(setPasswordButton);
             buttonPanel.add(removeButton);
@@ -901,28 +857,29 @@ public class AttendanceSystemUI {
 
         @Override
         public void refreshData() {
+            isUpdatingByCode = true; // Set flag
             studentModel.setRowCount(0);
             ExcelDataManager.getUsersByRole("Student").forEach(u -> studentModel.addRow(new Object[]{u.id, u.name, u.role}));
-
             staffModel.setRowCount(0);
             ExcelDataManager.getUsersByRole("Staff").forEach(u -> staffModel.addRow(new Object[]{u.id, u.name, u.role, u.subject}));
-
             reportModel.setRowCount(0);
             ExcelDataManager.getAllAttendance().forEach(r -> {
                 User student = ExcelDataManager.getUserById(r.studentId);
                 reportModel.addRow(new Object[]{r.studentId, student != null ? student.name : "N/A", r.date, r.subject, r.status});
             });
+            isUpdatingByCode = false; // Release flag
         }
     }
 
-    // --- STUDENT DASHBOARD (NOW WITH SUBJECT SUMMARY TAB) ---
+    // --- STUDENT DASHBOARD (NEW LAYOUT) ---
     static class StudentDashboardPanel extends JPanel implements Refreshable {
 
-        private final DefaultTableModel historyTableModel;
-        private final DefaultTableModel subjectSummaryModel; // NEW: Table model for the summary
-        // MODIFIED: Stat panel now 4 columns
+        private final DefaultTableModel historyTableModel, subjectSummaryModel;
         private final JPanel statsPanel = new JPanel(new GridLayout(1, 4, 20, 20));
         private final MainFrame mainFrame;
+        private final JLabel lowAttendanceWarning;
+        private final JComboBox<String> historyFilterDropdown;
+        private List<AttendanceRecord> allStudentRecords = new ArrayList<>();
 
         StudentDashboardPanel(MainFrame frame) {
             this.mainFrame = frame;
@@ -930,17 +887,23 @@ public class AttendanceSystemUI {
             setBorder(new EmptyBorder(25, 25, 25, 25));
             setBackground(AppStyles.BACKGROUND_COLOR);
 
+            JPanel headerPanel = new JPanel(new BorderLayout());
+            headerPanel.setOpaque(false);
             JLabel title = new JLabel("Welcome, " + frame.getCurrentUser().name);
             title.setFont(AppStyles.FONT_HEADER);
-            add(title, BorderLayout.NORTH);
-
+            headerPanel.add(title, BorderLayout.NORTH);
+            lowAttendanceWarning = new JLabel("⚠️ Your attendance is below 75% in one or more subjects. Please review your Subject Summary.");
+            lowAttendanceWarning.setFont(AppStyles.FONT_BOLD);
+            lowAttendanceWarning.setForeground(Color.WHITE);
+            lowAttendanceWarning.setBackground(AppStyles.ORANGE.darker());
+            lowAttendanceWarning.setOpaque(true);
+            lowAttendanceWarning.setBorder(new EmptyBorder(10, 15, 10, 15));
+            lowAttendanceWarning.setVisible(false);
+            headerPanel.add(lowAttendanceWarning, BorderLayout.SOUTH);
+            add(headerPanel, BorderLayout.NORTH);
             statsPanel.setOpaque(false);
 
-            // --- NEW: Create Tabbed Pane ---
-            JTabbedPane tabbedPane = new JTabbedPane();
-            tabbedPane.setFont(AppStyles.FONT_BOLD);
-
-            // --- Tab 1: Subject Summary (NEW) ---
+            // --- Subject Summary Table ---
             subjectSummaryModel = new DefaultTableModel(new String[]{"Subject", "Total Lectures", "Present", "Absent", "Percentage"}, 0) {
                 @Override
                 public boolean isCellEditable(int r, int c) {
@@ -949,9 +912,35 @@ public class AttendanceSystemUI {
             };
             JTable subjectTable = CustomComponents.createModernTable(subjectSummaryModel);
             subjectTable.getColumnModel().getColumn(4).setCellRenderer(new CustomComponents.PercentageCellRenderer());
-            tabbedPane.addTab("Subject Summary", new JScrollPane(subjectTable));
+            JScrollPane subjectScrollPane = new JScrollPane(subjectTable);
 
-            // --- Tab 2: Recent History (Existing) ---
+            JLabel summaryTitle = new JLabel("Overall Subject Summary");
+            summaryTitle.setFont(AppStyles.FONT_HEADER.deriveFont(20f));
+            summaryTitle.setBorder(new EmptyBorder(10, 5, 10, 5));
+
+            JPanel subjectSummaryPanel = new JPanel(new BorderLayout(0, 10));
+            subjectSummaryPanel.setOpaque(false);
+            subjectSummaryPanel.add(summaryTitle, BorderLayout.NORTH);
+            subjectSummaryPanel.add(subjectScrollPane, BorderLayout.CENTER);
+
+            // --- History Tabbed Pane ---
+            JTabbedPane tabbedPane = new JTabbedPane();
+            tabbedPane.setFont(AppStyles.FONT_BOLD);
+            JPanel historyPanel = new JPanel(new BorderLayout(10, 10));
+            historyPanel.setOpaque(false);
+            JPanel historyToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            historyToolbar.setOpaque(false);
+            historyToolbar.add(new JLabel("Filter by Subject:"));
+            DefaultComboBoxModel<String> filterModel = new DefaultComboBoxModel<>();
+            filterModel.addElement("All Subjects");
+            for (String s : SUBJECT_LIST) {
+                filterModel.addElement(s);
+            }
+            historyFilterDropdown = new JComboBox<>(filterModel);
+            historyFilterDropdown.addActionListener(e -> populateHistoryTable());
+            historyToolbar.add(historyFilterDropdown);
+            historyPanel.add(historyToolbar, BorderLayout.NORTH);
+
             historyTableModel = new DefaultTableModel(new String[]{"Date", "Subject", "Status"}, 0) {
                 @Override
                 public boolean isCellEditable(int r, int c) {
@@ -960,74 +949,76 @@ public class AttendanceSystemUI {
             };
             JTable historyTable = CustomComponents.createModernTable(historyTableModel);
             historyTable.getColumnModel().getColumn(2).setCellRenderer(new CustomComponents.StatusCellRenderer());
-            tabbedPane.addTab("Recent History", new JScrollPane(historyTable));
+            historyPanel.add(new JScrollPane(historyTable), BorderLayout.CENTER);
+            tabbedPane.addTab("Recent History Log", historyPanel);
 
-            // --- Layout Panel ---
+            // --- Main Center Panel Layout ---
             JPanel centerPanel = new JPanel(new BorderLayout(20, 20));
             centerPanel.setOpaque(false);
-            centerPanel.add(statsPanel, BorderLayout.NORTH);
-            centerPanel.add(tabbedPane, BorderLayout.CENTER); // Add tabbed pane instead of single card
+            centerPanel.add(statsPanel, BorderLayout.NORTH); // Stats on top
+            centerPanel.add(subjectSummaryPanel, BorderLayout.CENTER); // Summary table in middle
+            centerPanel.add(tabbedPane, BorderLayout.SOUTH); // History tabs at bottom
             add(centerPanel, BorderLayout.CENTER);
 
             refreshData();
         }
 
-        public void refreshData(User currentUser) {
-            // Clear both tables
+        private void populateHistoryTable() {
             historyTableModel.setRowCount(0);
+            String filter = (String) historyFilterDropdown.getSelectedItem();
+            boolean showAll = "All Subjects".equals(filter);
+            for (AttendanceRecord r : allStudentRecords) {
+                if (showAll || r.subject.equals(filter)) {
+                    historyTableModel.addRow(new Object[]{r.date, r.subject, r.status});
+                }
+            }
+        }
+
+        public void refreshData(User currentUser) {
             subjectSummaryModel.setRowCount(0);
+            allStudentRecords = ExcelDataManager.getAttendanceForStudent(currentUser.id);
+            populateHistoryTable();
 
-            List<AttendanceRecord> records = ExcelDataManager.getAttendanceForStudent(currentUser.id);
-            int overallPresent = 0;
-            int overallAbsent = 0;
-
-            // NEW: Map to build the subject summary
-            // Use LinkedHashMap to maintain insertion order (looks cleaner)
+            int overallPresent = 0, overallAbsent = 0;
+            boolean atRiskFlag = false;
             Map<String, int[]> subjectSummaryData = new LinkedHashMap<>();
-
-            for (AttendanceRecord r : records) {
-                // 1. Populate the history table (same as before)
-                historyTableModel.addRow(new Object[]{r.date, r.subject, r.status});
-
-                // 2. Update overall stats (same as before)
+            for (AttendanceRecord r : allStudentRecords) {
                 if ("Present".equals(r.status)) {
                     overallPresent++;
                 } else {
                     overallAbsent++;
                 }
-
-                // 3. NEW: Build the summary map
-                // Get the count array for this subject, or create it if it's the first time
-                int[] counts = subjectSummaryData.computeIfAbsent(r.subject, k -> new int[2]); // {present, absent}
+                int[] counts = subjectSummaryData.computeIfAbsent(r.subject, k -> new int[2]);
                 if ("Present".equals(r.status)) {
-                    counts[0]++; // Increment present count
+                    counts[0]++;
                 } else {
-                    counts[1]++; // Increment absent count
+                    counts[1]++;
                 }
             }
-
             int overallTotal = overallPresent + overallAbsent;
             double overallPercentage = (overallTotal == 0) ? 100.0 : ((double) overallPresent / overallTotal) * 100.0;
+            if (overallPercentage < 75.0 && overallTotal > 0) {
+                atRiskFlag = true;
+            }
 
-            // --- Update Top Stat Cards (Now with 4 stats) ---
             statsPanel.removeAll();
-            statsPanel.add(CustomComponents.createStatCard("Total Lectures", String.valueOf(overallTotal), "📚", Color.ORANGE));
+            statsPanel.add(CustomComponents.createStatCard("Total Lectures", String.valueOf(overallTotal), "📚", AppStyles.ORANGE));
             statsPanel.add(CustomComponents.createStatCard("Total Present", String.valueOf(overallPresent), "✅", AppStyles.GREEN));
             statsPanel.add(CustomComponents.createStatCard("Total Absent", String.valueOf(overallAbsent), "❌", AppStyles.RED));
             statsPanel.add(CustomComponents.createStatCard("Overall Percentage", String.format("%.0f%%", overallPercentage), "📈", AppStyles.PRIMARY_COLOR));
-            statsPanel.revalidate();
-            statsPanel.repaint();
 
-            // --- NEW: Populate the Subject Summary Table ---
             for (Map.Entry<String, int[]> entry : subjectSummaryData.entrySet()) {
                 String subject = entry.getKey();
-                int present = entry.getValue()[0];
-                int absent = entry.getValue()[1];
-                int total = present + absent;
+                int present = entry.getValue()[0], absent = entry.getValue()[1], total = present + absent;
                 double percentage = (total == 0) ? 100.0 : ((double) present / total) * 100.0;
-
+                if (percentage < 75.0 && total > 0) {
+                    atRiskFlag = true;
+                }
                 subjectSummaryModel.addRow(new Object[]{subject, total, present, absent, percentage});
             }
+            lowAttendanceWarning.setVisible(atRiskFlag);
+            statsPanel.revalidate();
+            statsPanel.repaint();
         }
 
         @Override
@@ -1036,48 +1027,71 @@ public class AttendanceSystemUI {
         }
     }
 
-    // --- Advanced Reports Panel (BUG FIX Applied) ---
-    static class ReportsPanel extends JPanel implements Refreshable {
+    // --- BASE Reports Panel ---
+    static abstract class BaseReportsPanel extends JPanel implements Refreshable {
 
-        private final Frame ownerFrame;
+        protected final Frame ownerFrame;
+        protected final DefaultTableModel aggregateReportModel, atRiskReportModel;
+        protected final JTable aggregateReportTable, atRiskReportTable;
+        protected final ModernDatePickerButton aggStartDateChooser, aggEndDateChooser; // NEW
+        protected final ModernDatePickerButton atRiskStartDateChooser, atRiskEndDateChooser; // NEW
+        protected final JTextField atRiskThresholdField;
 
-        private final DefaultTableModel aggregateReportModel;
-        private final JTable aggregateReportTable;
-        private final JTextField aggStartDateField, aggEndDateField;
-
-        private final DefaultTableModel atRiskReportModel;
-        private final JTable atRiskReportTable;
-        private final JTextField atRiskStartDateField, atRiskEndDateField, atRiskThresholdField;
-
-        ReportsPanel(MainFrame frame) {
+        public BaseReportsPanel(MainFrame frame) {
             this.ownerFrame = frame;
             setLayout(new BorderLayout(20, 20));
             setBorder(new EmptyBorder(25, 25, 25, 25));
             setBackground(AppStyles.BACKGROUND_COLOR);
-
             JLabel title = new JLabel("Attendance Reports");
             title.setFont(AppStyles.FONT_HEADER);
             add(title, BorderLayout.NORTH);
-
             JTabbedPane tabbedPane = new JTabbedPane();
             tabbedPane.setFont(AppStyles.FONT_BOLD);
 
-            String todayStr = LocalDate.now().format(GLOBAL_DATE_FORMATTER);
-            String firstDayOfMonthStr = LocalDate.now().withDayOfMonth(1).format(GLOBAL_DATE_FORMATTER);
+            aggregateReportModel = createReportModel();
+            aggregateReportTable = CustomComponents.createModernTable(aggregateReportModel);
+            aggregateReportTable.getColumnModel().getColumn(5).setCellRenderer(new CustomComponents.PercentageCellRenderer()); // Col 5 is %
+            atRiskReportModel = createReportModel();
+            atRiskReportTable = CustomComponents.createModernTable(atRiskReportModel);
+            atRiskReportTable.getColumnModel().getColumn(5).setCellRenderer(new CustomComponents.PercentageCellRenderer()); // Col 5 is %
 
-            // --- Tab 1: Aggregate Report Panel ---
+            aggStartDateChooser = new ModernDatePickerButton(frame);
+            aggEndDateChooser = new ModernDatePickerButton(frame);
+            atRiskStartDateChooser = new ModernDatePickerButton(frame);
+            atRiskEndDateChooser = new ModernDatePickerButton(frame);
+
+            LocalDate firstDayOfMonth = LocalDate.now().withDayOfMonth(1);
+            aggStartDateChooser.setSelectedDate(firstDayOfMonth);
+            atRiskStartDateChooser.setSelectedDate(firstDayOfMonth);
+
+            atRiskThresholdField = new JTextField("75", 4);
+            atRiskThresholdField.setFont(AppStyles.FONT_NORMAL);
+            atRiskThresholdField.setPreferredSize(new Dimension(50, 40));
+
+            tabbedPane.addTab("Aggregate Report", createAggregateReportTab());
+            tabbedPane.addTab("Student At Risk Report", createAtRiskReportTab());
+            add(tabbedPane, BorderLayout.CENTER);
+        }
+
+        // REFACTORED: Create separate abstract methods for each toolbar
+        protected abstract JPanel createAggToolbarExtras();
+
+        protected abstract JPanel createAtRiskToolbarExtras();
+
+        protected abstract String getAggSubjectFilter();
+
+        protected abstract String getAtRiskSubjectFilter();
+
+        private JPanel createAggregateReportTab() {
             JPanel aggregatePanel = new JPanel(new BorderLayout(15, 15));
             aggregatePanel.setOpaque(false);
-
             JPanel aggToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
             aggToolbar.setOpaque(false);
             aggToolbar.add(new JLabel("Start Date:"));
-            aggStartDateField = new JTextField(firstDayOfMonthStr, 10);
-            aggToolbar.add(aggStartDateField);
+            aggToolbar.add(aggStartDateChooser);
             aggToolbar.add(new JLabel("End Date:"));
-            aggEndDateField = new JTextField(todayStr, 10);
-            aggToolbar.add(aggEndDateField);
-
+            aggToolbar.add(aggEndDateChooser);
+            aggToolbar.add(createAggToolbarExtras()); // Call specific method
             JButton aggGenerateButton = new JButton("Generate Report");
             aggGenerateButton.setBackground(AppStyles.PRIMARY_COLOR);
             aggGenerateButton.setForeground(Color.WHITE);
@@ -1085,17 +1099,7 @@ public class AttendanceSystemUI {
             aggGenerateButton.addActionListener(e -> generateAggregateReport());
             aggToolbar.add(aggGenerateButton);
             aggregatePanel.add(aggToolbar, BorderLayout.NORTH);
-
-            aggregateReportModel = new DefaultTableModel(new String[]{"Student ID", "Name", "Total Present", "Total Absent", "Attendance %"}, 0) {
-                @Override
-                public boolean isCellEditable(int r, int c) {
-                    return false;
-                }
-            };
-            aggregateReportTable = CustomComponents.createModernTable(aggregateReportModel);
-            aggregateReportTable.getColumnModel().getColumn(4).setCellRenderer(new CustomComponents.PercentageCellRenderer());
             aggregatePanel.add(new JScrollPane(aggregateReportTable), BorderLayout.CENTER);
-
             JPanel aggActionsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
             aggActionsPanel.setOpaque(false);
             JButton aggExportButton = new JButton("Export to CSV");
@@ -1103,25 +1107,21 @@ public class AttendanceSystemUI {
             aggExportButton.addActionListener(e -> exportToCSV(aggregateReportTable, "AggregateReport"));
             aggActionsPanel.add(aggExportButton);
             aggregatePanel.add(aggActionsPanel, BorderLayout.SOUTH);
+            return aggregatePanel;
+        }
 
-            tabbedPane.addTab("Aggregate Report", aggregatePanel);
-
-            // --- Tab 2: Student At Risk Panel ---
+        private JPanel createAtRiskReportTab() {
             JPanel atRiskPanel = new JPanel(new BorderLayout(15, 15));
             atRiskPanel.setOpaque(false);
-
             JPanel atRiskToolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
             atRiskToolbar.setOpaque(false);
             atRiskToolbar.add(new JLabel("Start Date:"));
-            atRiskStartDateField = new JTextField(firstDayOfMonthStr, 10);
-            atRiskToolbar.add(atRiskStartDateField);
+            atRiskToolbar.add(atRiskStartDateChooser);
             atRiskToolbar.add(new JLabel("End Date:"));
-            atRiskEndDateField = new JTextField(todayStr, 10);
-            atRiskToolbar.add(atRiskEndDateField);
+            atRiskToolbar.add(atRiskEndDateChooser);
+            atRiskToolbar.add(createAtRiskToolbarExtras()); // Call specific method
             atRiskToolbar.add(new JLabel("Threshold % (Below):"));
-            atRiskThresholdField = new JTextField("75", 4);
             atRiskToolbar.add(atRiskThresholdField);
-
             JButton atRiskGenerateButton = new JButton("Find Students At Risk");
             atRiskGenerateButton.setBackground(AppStyles.RED);
             atRiskGenerateButton.setForeground(Color.WHITE);
@@ -1129,17 +1129,7 @@ public class AttendanceSystemUI {
             atRiskGenerateButton.addActionListener(e -> generateAtRiskReport());
             atRiskToolbar.add(atRiskGenerateButton);
             atRiskPanel.add(atRiskToolbar, BorderLayout.NORTH);
-
-            atRiskReportModel = new DefaultTableModel(new String[]{"Student ID", "Name", "Total Present", "Total Absent", "Attendance %"}, 0) {
-                @Override
-                public boolean isCellEditable(int r, int c) {
-                    return false;
-                }
-            };
-            atRiskReportTable = CustomComponents.createModernTable(atRiskReportModel);
-            atRiskReportTable.getColumnModel().getColumn(4).setCellRenderer(new CustomComponents.PercentageCellRenderer());
             atRiskPanel.add(new JScrollPane(atRiskReportTable), BorderLayout.CENTER);
-
             JPanel atRiskActionsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
             atRiskActionsPanel.setOpaque(false);
             JButton atRiskExportButton = new JButton("Export to CSV");
@@ -1147,30 +1137,30 @@ public class AttendanceSystemUI {
             atRiskExportButton.addActionListener(e -> exportToCSV(atRiskReportTable, "AtRiskReport"));
             atRiskActionsPanel.add(atRiskExportButton);
             atRiskPanel.add(atRiskActionsPanel, BorderLayout.SOUTH);
-
-            tabbedPane.addTab("Student At Risk Report", atRiskPanel);
-
-            add(tabbedPane, BorderLayout.CENTER);
+            return atRiskPanel;
         }
 
-        // Common calculation engine for both reports
-        private Map<String, double[]> calculateReportData(String startDateStr, String endDateStr) throws DateTimeParseException, IllegalArgumentException {
-            LocalDate startDate, endDate;
-            startDate = LocalDate.parse(startDateStr, GLOBAL_DATE_FORMATTER);
-            endDate = LocalDate.parse(endDateStr, GLOBAL_DATE_FORMATTER);
-
-            if (startDate.isAfter(endDate)) {
+        protected Map<String, double[]> calculateReportData(LocalDate start, LocalDate end, String subjectFilter) throws IllegalArgumentException {
+            if (start == null || end == null) {
+                throw new IllegalArgumentException("Dates cannot be empty.");
+            }
+            if (start.isAfter(end)) {
                 throw new IllegalArgumentException("Start Date cannot be after End Date.");
             }
 
             List<User> students = ExcelDataManager.getUsersByRole("Student");
             List<AttendanceRecord> allRecords = ExcelDataManager.getAllAttendance();
+            boolean allSubjects = "All Subjects".equals(subjectFilter);
 
-            List<AttendanceRecord> filteredRecords = allRecords.stream()
+            List<AttendanceRecord> subjectFilteredRecords = allRecords.stream()
+                    .filter(r -> allSubjects || r.subject.equals(subjectFilter))
+                    .collect(Collectors.toList());
+
+            List<AttendanceRecord> dateFilteredRecords = subjectFilteredRecords.stream()
                     .filter(r -> {
                         try {
                             LocalDate recordDate = LocalDate.parse(r.date, GLOBAL_DATE_FORMATTER);
-                            return !recordDate.isBefore(startDate) && !recordDate.isAfter(endDate);
+                            return !recordDate.isBefore(start) && !recordDate.isAfter(end);
                         } catch (DateTimeParseException e) {
                             return false;
                         }
@@ -1179,99 +1169,86 @@ public class AttendanceSystemUI {
 
             Map<String, double[]> reportData = new HashMap<>(); // Stores {present, absent}
             students.forEach(student -> reportData.put(student.id, new double[]{0, 0}));
-
-            for (AttendanceRecord record : filteredRecords) {
+            for (AttendanceRecord record : dateFilteredRecords) {
                 double[] counts = reportData.get(record.studentId);
                 if (counts != null) {
                     if ("Present".equals(record.status)) {
                         counts[0]++;
                     } else {
                         counts[1]++;
+
                     }
                 }
             }
             return reportData;
         }
 
-        // Logic for Tab 1
-        private void generateAggregateReport() {
+        private DefaultTableModel createReportModel() {
+            return new DefaultTableModel(new String[]{"Student ID", "Name", "Total Lectures", "Total Present", "Total Absent", "Attendance %"}, 0) {
+                @Override
+                public boolean isCellEditable(int r, int c) {
+                    return false;
+                }
+            };
+        }
+
+        protected void generateAggregateReport() {
             Map<String, double[]> reportData;
             try {
-                reportData = calculateReportData(aggStartDateField.getText(), aggEndDateField.getText());
-            } catch (DateTimeParseException e) {
-                JOptionPane.showMessageDialog(this, "Invalid date format. Please use yyyy-MM-dd.", "Date Error", JOptionPane.ERROR_MESSAGE);
-                return;
+                reportData = calculateReportData(aggStartDateChooser.getSelectedDate(), aggEndDateChooser.getSelectedDate(), getAggSubjectFilter()); // Use specific getter
             } catch (IllegalArgumentException e) {
-                JOptionPane.showMessageDialog(this, e.getMessage(), "Date Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, e.getMessage(), "Input Error", JOptionPane.ERROR_MESSAGE);
                 return;
             }
-
             aggregateReportModel.setRowCount(0);
             List<User> students = ExcelDataManager.getUsersByRole("Student");
             for (User student : students) {
                 double[] counts = reportData.get(student.id);
-                double present = counts[0];
-                double absent = counts[1];
-                double total = present + absent;
-                double percentage = (total == 0) ? 100.0 : (present / total) * 100.0; // Default to 100 if no records
-
-                aggregateReportModel.addRow(new Object[]{student.id, student.name, (int) present, (int) absent, percentage});
+                double present = counts[0], absent = counts[1], total = present + absent;
+                double percentage = (total == 0) ? 100.0 : (present / total) * 100.0;
+                aggregateReportModel.addRow(new Object[]{student.id, student.name, (int) total, (int) present, (int) absent, percentage});
             }
         }
 
-        // Logic for Tab 2 (WITH ERROR FIXED)
-        private void generateAtRiskReport() {
+        protected void generateAtRiskReport() {
             Map<String, double[]> reportData;
             double threshold;
             try {
-                reportData = calculateReportData(atRiskStartDateField.getText(), atRiskEndDateField.getText());
                 threshold = Double.parseDouble(atRiskThresholdField.getText());
-
+                reportData = calculateReportData(atRiskStartDateChooser.getSelectedDate(), atRiskEndDateChooser.getSelectedDate(), getAtRiskSubjectFilter()); // Use specific getter
                 // --- BUG FIX IS HERE ---
-                // The catch order is now correct: Specific (NumberFormat) before General (IllegalArgument)
-            } catch (DateTimeParseException e) {
-                JOptionPane.showMessageDialog(this, "Invalid date format. Please use yyyy-MM-dd.", "Date Error", JOptionPane.ERROR_MESSAGE);
-                return;
             } catch (NumberFormatException e) {
                 JOptionPane.showMessageDialog(this, "Threshold must be a number (e.g., 75).", "Input Error", JOptionPane.ERROR_MESSAGE);
                 return;
             } catch (IllegalArgumentException e) {
-                JOptionPane.showMessageDialog(this, e.getMessage(), "Date Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(this, e.getMessage(), "Input Error", JOptionPane.ERROR_MESSAGE);
                 return;
             }
             // --- END OF FIX ---
-
             atRiskReportModel.setRowCount(0);
             List<User> students = ExcelDataManager.getUsersByRole("Student");
             for (User student : students) {
                 double[] counts = reportData.get(student.id);
-                double present = counts[0];
-                double absent = counts[1];
-                double total = present + absent;
-                double percentage = (total == 0) ? 100.0 : (present / total) * 100.0; // Treat 0/0 as 100% (not at risk)
-
-                // Only show students who have records AND are below the threshold
+                double present = counts[0], absent = counts[1], total = present + absent;
+                double percentage = (total == 0) ? 100.0 : (present / total) * 100.0;
                 if (total > 0 && percentage < threshold) {
-                    atRiskReportModel.addRow(new Object[]{student.id, student.name, (int) present, (int) absent, percentage});
+                    atRiskReportModel.addRow(new Object[]{student.id, student.name, (int) total, (int) present, (int) absent, percentage});
                 }
             }
             if (atRiskReportModel.getRowCount() == 0) {
-                JOptionPane.showMessageDialog(this, "No students are below the " + threshold + "% threshold for this period.", "Report Complete", JOptionPane.INFORMATION_MESSAGE);
+                JOptionPane.showMessageDialog(this, "No students are below " + threshold + "% for this period.", "Report Complete", JOptionPane.INFORMATION_MESSAGE);
             }
         }
 
-        // Common Export logic
-        private void exportToCSV(JTable table, String reportName) {
+        protected void exportToCSV(JTable table, String reportName) {
             TableModel model = table.getModel();
             if (model.getRowCount() == 0) {
-                JOptionPane.showMessageDialog(this, "No data to export. Please generate a report first.", "Export Error", JOptionPane.WARNING_MESSAGE);
+                JOptionPane.showMessageDialog(this, "No data to export.", "Export Error", JOptionPane.WARNING_MESSAGE);
                 return;
             }
-
             JFileChooser fileChooser = new JFileChooser();
             fileChooser.setDialogTitle("Save Report as CSV");
             fileChooser.setSelectedFile(new File(reportName + "_" + LocalDate.now().format(GLOBAL_DATE_FORMATTER) + ".csv"));
-
             if (fileChooser.showSaveDialog(ownerFrame) == JFileChooser.APPROVE_OPTION) {
                 File file = fileChooser.getSelectedFile();
                 try (BufferedWriter bw = new BufferedWriter(new FileWriter(file))) {
@@ -1279,7 +1256,6 @@ public class AttendanceSystemUI {
                         bw.write(model.getColumnName(i) + (i == model.getColumnCount() - 1 ? "" : ","));
                     }
                     bw.newLine();
-
                     for (int r = 0; r < model.getRowCount(); r++) {
                         for (int c = 0; c < model.getColumnCount(); c++) {
                             Object value = model.getValueAt(r, c);
@@ -1304,32 +1280,127 @@ public class AttendanceSystemUI {
         }
     }
 
+    // --- NEW: Admin-Specific Report Panel (FIXED & REFACTORED) ---
+    static class AdminReportsPanel extends BaseReportsPanel {
+
+        // BUG FIX: Must NOT be final if they are initialized in methods called by super()
+        private JComboBox<String> aggFilterDropdown;
+        private JComboBox<String> atRiskFilterDropdown;
+
+        AdminReportsPanel(MainFrame frame) {
+            // BUG FIX: The super() constructor MUST be the very first line.
+            // It will call the overridden create...ToolbarExtras() methods,
+            // which will initialize the dropdowns.
+            super(frame);
+        }
+
+        // Helper to create the model, called by the two methods below
+        private DefaultComboBoxModel<String> createFilterModel() {
+            DefaultComboBoxModel<String> filterModel = new DefaultComboBoxModel<>();
+            filterModel.addElement("All Subjects");
+            for (String s : SUBJECT_LIST) {
+                filterModel.addElement(s);
+            }
+            return filterModel;
+        }
+
+        @Override
+        protected JPanel createAggToolbarExtras() {
+            // BUG FIX: Initialize the field here
+            this.aggFilterDropdown = new JComboBox<>(createFilterModel());
+            this.aggFilterDropdown.setFont(AppStyles.FONT_NORMAL);
+
+            JPanel extraPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+            extraPanel.setOpaque(false);
+            extraPanel.add(new JLabel("Filter Subject:"));
+            extraPanel.add(this.aggFilterDropdown); // Add the initialized component
+            return extraPanel;
+        }
+
+        @Override
+        protected JPanel createAtRiskToolbarExtras() {
+            // BUG FIX: Initialize the OTHER field here
+            this.atRiskFilterDropdown = new JComboBox<>(createFilterModel());
+            this.atRiskFilterDropdown.setFont(AppStyles.FONT_NORMAL);
+
+            JPanel extraPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+            extraPanel.setOpaque(false);
+            extraPanel.add(new JLabel("Filter Subject:"));
+            extraPanel.add(this.atRiskFilterDropdown); // Add the initialized component
+            return extraPanel;
+        }
+
+        @Override
+        protected String getAggSubjectFilter() {
+            return (String) aggFilterDropdown.getSelectedItem();
+        }
+
+        @Override
+        protected String getAtRiskSubjectFilter() {
+            return (String) atRiskFilterDropdown.getSelectedItem();
+        }
+    }
+
+    // --- NEW: Staff-Specific Report Panel ---
+    static class StaffReportsPanel extends BaseReportsPanel {
+
+        private final String staffSubject;
+
+        StaffReportsPanel(MainFrame frame) {
+            super(frame);
+            this.staffSubject = frame.getCurrentUser().subject;
+        }
+
+        private JPanel createLabelPanel() {
+            JPanel extraPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
+            extraPanel.setOpaque(false);
+            JLabel subjectLabel = new JLabel("Subject: " + this.staffSubject);
+            subjectLabel.setFont(AppStyles.FONT_BOLD);
+            extraPanel.add(subjectLabel);
+            return extraPanel;
+        }
+
+        @Override
+        protected JPanel createAggToolbarExtras() {
+            return createLabelPanel();
+        }
+
+        @Override
+        protected JPanel createAtRiskToolbarExtras() {
+            return createLabelPanel();
+        }
+
+        @Override
+        protected String getAggSubjectFilter() {
+            return this.staffSubject;
+        }
+
+        @Override
+        protected String getAtRiskSubjectFilter() {
+            return this.staffSubject;
+        }
+    }
+
     // --- Add User Dialog ---
     static class AddUserDialog extends JDialog {
 
         AddUserDialog(Frame owner, String role, Runnable refreshCallback) {
             super(owner, "Add New " + role, true);
-
             boolean isStaff = role.equalsIgnoreCase("Staff");
-
             setSize(400, isStaff ? 300 : 250);
             setLocationRelativeTo(owner);
             setLayout(new GridBagLayout());
-
             GridBagConstraints gbc = new GridBagConstraints();
             gbc.insets = new Insets(8, 8, 8, 8);
             gbc.fill = GridBagConstraints.HORIZONTAL;
             gbc.gridx = 0;
-
             JTextField nameField = new JTextField();
             JPasswordField passField = new JPasswordField();
-
             gbc.gridy = 0;
             add(new JLabel("Full Name:"), gbc);
             gbc.gridx = 1;
             gbc.weightx = 1.0;
             add(nameField, gbc);
-
             gbc.gridy = 1;
             gbc.gridx = 0;
             gbc.weightx = 0;
@@ -1337,7 +1408,6 @@ public class AttendanceSystemUI {
             gbc.gridx = 1;
             gbc.weightx = 1.0;
             add(passField, gbc);
-
             JComboBox<String> subjectSelector = new JComboBox<>(SUBJECT_LIST);
             if (isStaff) {
                 gbc.gridy = 2;
@@ -1348,7 +1418,6 @@ public class AttendanceSystemUI {
                 gbc.weightx = 1.0;
                 add(subjectSelector, gbc);
             }
-
             JButton addButton = new JButton("Add User");
             addButton.setBackground(AppStyles.PRIMARY_COLOR);
             addButton.setForeground(Color.WHITE);
@@ -1358,19 +1427,13 @@ public class AttendanceSystemUI {
             gbc.anchor = GridBagConstraints.EAST;
             gbc.fill = GridBagConstraints.NONE;
             add(addButton, gbc);
-
             addButton.addActionListener(e -> {
-                String name = nameField.getText();
-                String pass = new String(passField.getPassword());
+                String name = nameField.getText().trim(), pass = new String(passField.getPassword()).trim();
                 if (name.isEmpty() || pass.isEmpty()) {
                     JOptionPane.showMessageDialog(this, "Name and Password cannot be empty.", "Error", JOptionPane.ERROR_MESSAGE);
                     return;
                 }
-
-                String subject = "";
-                if (isStaff) {
-                    subject = (String) subjectSelector.getSelectedItem();
-                }
+                String subject = isStaff ? (String) subjectSelector.getSelectedItem() : "";
                 ExcelDataManager.addUser(name, pass, role, subject);
                 refreshCallback.run();
                 dispose();
@@ -1378,7 +1441,172 @@ public class AttendanceSystemUI {
         }
     }
 
-    // --- Excel Data Manager (NOW WITH PASSWORD UPDATE) ---
+    // --- NEW: Custom Modern Date Picker Button (No external JAR needed) ---
+    static class ModernDatePickerButton extends JButton {
+
+        private LocalDate selectedDate;
+        private final Frame owner;
+
+        public ModernDatePickerButton(Frame owner) {
+            this.owner = owner;
+            setSelectedDate(LocalDate.now());
+            this.setFont(AppStyles.FONT_NORMAL);
+            this.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            this.setIcon(new ImageIcon(createCalendarIcon(AppStyles.SECONDARY_TEXT_COLOR))); // Simple icon
+            this.setHorizontalTextPosition(SwingConstants.LEFT);
+            this.setIconTextGap(8);
+            this.addActionListener(e -> openDatePicker());
+        }
+
+        private void openDatePicker() {
+            Point loc = this.getLocationOnScreen();
+            ModernDatePickerDialog dialog = new ModernDatePickerDialog(owner, selectedDate);
+            dialog.setLocation(loc.x, loc.y + this.getHeight());
+            dialog.setVisible(true);
+            if (dialog.getSelectedDate() != null) {
+                setSelectedDate(dialog.getSelectedDate());
+            }
+        }
+
+        public LocalDate getSelectedDate() {
+            return selectedDate;
+        }
+
+        public void setSelectedDate(LocalDate date) {
+            this.selectedDate = date;
+            this.setText(selectedDate.format(GLOBAL_DATE_FORMATTER));
+        }
+
+        // Create a simple programmatic icon so we don't need image files
+        private static java.awt.image.BufferedImage createCalendarIcon(Color color) {
+            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g2 = img.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(color);
+            g2.drawRect(1, 3, 13, 12); // Box
+            g2.fillRect(3, 1, 3, 4);  // Left hinge
+            g2.fillRect(9, 1, 3, 4);  // Right hinge
+            g2.fillRect(3, 7, 3, 2);  // Day box 1
+            g2.fillRect(6, 7, 3, 2);  // Day box 2
+            g2.fillRect(9, 7, 3, 2);  // Day box 3
+            g2.dispose();
+            return img;
+        }
+    }
+
+    // --- NEW: Custom Calendar Dialog (Replaces JCalendar) ---
+    static class ModernDatePickerDialog extends JDialog {
+
+        private LocalDate selectedDate;
+        private YearMonth currentYearMonth;
+        private final JPanel calendarPanel;
+        private final JLabel monthYearLabel;
+
+        public ModernDatePickerDialog(Frame owner, LocalDate initialDate) {
+            super(owner, true);
+            this.selectedDate = initialDate;
+            this.currentYearMonth = YearMonth.from(initialDate);
+            setUndecorated(true); // Modern look
+            setLayout(new BorderLayout(5, 5));
+            getRootPane().setBorder(BorderFactory.createLineBorder(AppStyles.BORDER_COLOR, 1));
+            ((JPanel) getContentPane()).setBorder(new EmptyBorder(5, 5, 5, 5));
+
+            JPanel headerPanel = new JPanel(new BorderLayout());
+            headerPanel.setBackground(Color.WHITE);
+            JButton prevButton = createNavButton("‹");
+            prevButton.addActionListener(e -> updateCalendar(currentYearMonth.minusMonths(1)));
+            JButton nextButton = createNavButton("›");
+            nextButton.addActionListener(e -> updateCalendar(currentYearMonth.plusMonths(1)));
+            monthYearLabel = new JLabel("", SwingConstants.CENTER);
+            monthYearLabel.setFont(AppStyles.FONT_BOLD.deriveFont(16f));
+            headerPanel.add(prevButton, BorderLayout.WEST);
+            headerPanel.add(monthYearLabel, BorderLayout.CENTER);
+            headerPanel.add(nextButton, BorderLayout.EAST);
+            add(headerPanel, BorderLayout.NORTH);
+
+            calendarPanel = new JPanel(new GridLayout(0, 7, 2, 2)); // 7 columns
+            calendarPanel.setBackground(Color.WHITE);
+            add(calendarPanel, BorderLayout.CENTER);
+
+            JButton todayButton = new JButton("Today");
+            todayButton.setFont(AppStyles.FONT_BOLD);
+            todayButton.addActionListener(e -> setSelectedDateAndClose(LocalDate.now()));
+            add(todayButton, BorderLayout.SOUTH);
+
+            updateCalendar(currentYearMonth);
+            pack();
+        }
+
+        private void updateCalendar(YearMonth yearMonth) {
+            currentYearMonth = yearMonth;
+            calendarPanel.removeAll();
+            monthYearLabel.setText(currentYearMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy")));
+
+            DayOfWeek firstDay = DayOfWeek.MONDAY;
+            for (int i = 0; i < 7; i++) {
+                String dayName = firstDay.plus(i).getDisplayName(TextStyle.SHORT, Locale.getDefault());
+                JLabel headerLabel = new JLabel(dayName, SwingConstants.CENTER);
+                headerLabel.setFont(AppStyles.FONT_BOLD);
+                headerLabel.setForeground(AppStyles.SECONDARY_TEXT_COLOR);
+                calendarPanel.add(headerLabel);
+            }
+
+            LocalDate firstOfMonth = currentYearMonth.atDay(1);
+            int padding = (firstOfMonth.getDayOfWeek().getValue() - firstDay.getValue() + 7) % 7;
+            for (int i = 0; i < padding; i++) {
+                calendarPanel.add(new JLabel(""));
+            }
+
+            for (int day = 1; day <= currentYearMonth.lengthOfMonth(); day++) {
+                calendarPanel.add(createDayButton(day));
+            }
+            pack(); // Resize dialog to fit new month
+        }
+
+        private JButton createDayButton(int day) {
+            JButton dayButton = new JButton(String.valueOf(day));
+            dayButton.setFont(AppStyles.FONT_NORMAL);
+            dayButton.setFocusPainted(false);
+            dayButton.setMargin(new Insets(8, 8, 8, 8));
+            dayButton.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            LocalDate buttonDate = currentYearMonth.atDay(day);
+
+            if (buttonDate.equals(LocalDate.now())) {
+                dayButton.setForeground(AppStyles.PRIMARY_COLOR);
+                dayButton.setFont(AppStyles.FONT_BOLD);
+            }
+            if (buttonDate.equals(selectedDate)) {
+                dayButton.setBackground(AppStyles.PRIMARY_COLOR);
+                dayButton.setForeground(Color.WHITE);
+                dayButton.setFont(AppStyles.FONT_BOLD);
+            } else {
+                dayButton.setBackground(Color.WHITE);
+                dayButton.setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
+            }
+            dayButton.addActionListener(e -> setSelectedDateAndClose(buttonDate));
+            return dayButton;
+        }
+
+        private JButton createNavButton(String text) {
+            JButton navButton = new JButton(text);
+            navButton.setFont(AppStyles.FONT_BOLD.deriveFont(18f));
+            navButton.setBorder(new EmptyBorder(5, 10, 5, 10));
+            navButton.setContentAreaFilled(false);
+            navButton.setCursor(new Cursor(Cursor.HAND_CURSOR));
+            return navButton;
+        }
+
+        private void setSelectedDateAndClose(LocalDate date) {
+            this.selectedDate = date;
+            this.dispose();
+        }
+
+        public LocalDate getSelectedDate() {
+            return selectedDate;
+        }
+    }
+
+    // --- Excel Data Manager (ALL WRITE METHODS FIXED) ---
     static class ExcelDataManager {
 
         private static final String FILE_NAME = "college_data.xlsx";
@@ -1396,7 +1624,6 @@ public class AttendanceSystemUI {
                     workbook = new XSSFWorkbook(fis);
                     fis.close();
                 }
-
                 Sheet usersSheet = workbook.getSheet(USERS_SHEET);
                 if (usersSheet == null) {
                     usersSheet = workbook.createSheet(USERS_SHEET);
@@ -1406,7 +1633,6 @@ public class AttendanceSystemUI {
                     header.createCell(2).setCellValue("Name");
                     header.createCell(3).setCellValue("Role");
                     header.createCell(4).setCellValue("Subject");
-
                     Row adminRow = usersSheet.createRow(1);
                     adminRow.createCell(0).setCellValue("admin");
                     adminRow.createCell(1).setCellValue("admin123");
@@ -1422,7 +1648,6 @@ public class AttendanceSystemUI {
                         header.createCell(4).setCellValue("Subject");
                     }
                 }
-
                 Sheet attendanceSheet = workbook.getSheet(ATTENDANCE_SHEET);
                 if (attendanceSheet == null) {
                     attendanceSheet = workbook.createSheet(ATTENDANCE_SHEET);
@@ -1440,17 +1665,16 @@ public class AttendanceSystemUI {
                         header.createCell(3).setCellValue("Subject");
                     }
                 }
-
                 try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
                     workbook.write(fos);
                 }
                 workbook.close();
-
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
 
+        // --- AUTHENTICATE METHOD (PATCHED) ---
         public static User authenticateUser(String username, String password) {
             try (FileInputStream fis = new FileInputStream(FILE_NAME); Workbook workbook = new XSSFWorkbook(fis)) {
                 Sheet sheet = workbook.getSheet(USERS_SHEET);
@@ -1458,21 +1682,15 @@ public class AttendanceSystemUI {
                     if (row.getRowNum() == 0) {
                         continue;
                     }
+                    // FIX: Use helper to read any cell type (String/Number) and trim whitespace
+                    String cellName = getStringValue(row.getCell(2), "").trim();
+                    String cellPass = getStringValue(row.getCell(1), "").trim();
 
-                    Cell nameCell = row.getCell(2);
-                    Cell passCell = row.getCell(1);
-
-                    if (nameCell != null && passCell != null
-                            && nameCell.getStringCellValue().equals(username)
-                            && passCell.getStringCellValue().equals(password)) {
-
-                        String id = row.getCell(0).getStringCellValue();
-                        String role = row.getCell(3).getStringCellValue();
-                        String subject = "";
-
-                        if (role.equals("Staff") && row.getCell(4) != null) {
-                            subject = row.getCell(4).getStringCellValue();
-                        }
+                    if (cellName.equals(username.trim()) && cellPass.equals(password.trim())) {
+                        String id = getStringValue(row.getCell(0), "");
+                        String role = getStringValue(row.getCell(3), "");
+                        String subject = getStringValue(row.getCell(4), "");
+                        // Pass the original (non-trimmed) inputs to the constructor as they were the ones validated
                         return new User(id, password, username, role, subject);
                     }
                 }
@@ -1482,98 +1700,132 @@ public class AttendanceSystemUI {
             return null;
         }
 
+        // --- ADD USER (WRITE METHOD PATCHED) ---
         public static void addUser(String name, String password, String role, String subject) {
             String idPrefix = role.equalsIgnoreCase("Student") ? "STU" : "STAFF";
-
-            List<User> usersOfRole = getUsersByRole(role);
-            int lastIdNum = usersOfRole.stream()
-                    .map(u -> u.id.replaceAll("[^0-9]", ""))
-                    .filter(s -> !s.isEmpty())
-                    .mapToInt(Integer::parseInt)
-                    .max()
-                    .orElse(0);
-
+            int lastIdNum = getUsersByRole(role).stream()
+                    .map(u -> u.id.replaceAll("[^0-9]", "")).filter(s -> !s.isEmpty())
+                    .mapToInt(Integer::parseInt).max().orElse(0);
             String newId = String.format("%s%03d", idPrefix, lastIdNum + 1);
 
-            try (FileInputStream fis = new FileInputStream(FILE_NAME); Workbook workbook = new XSSFWorkbook(fis)) {
-                Sheet sheet = workbook.getSheet(USERS_SHEET);
-                Row newRow = sheet.createRow(sheet.getLastRowNum() + 1);
-                newRow.createCell(0).setCellValue(newId);
-                newRow.createCell(1).setCellValue(password);
-                newRow.createCell(2).setCellValue(name);
-                newRow.createCell(3).setCellValue(role);
-                newRow.createCell(4).setCellValue(subject != null ? subject : "");
-
-                try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
-                    workbook.write(fos);
-                }
+            Workbook workbook;
+            try (FileInputStream fis = new FileInputStream(FILE_NAME)) {
+                workbook = new XSSFWorkbook(fis);
             } catch (IOException e) {
                 e.printStackTrace();
+                return;
+            }
+
+            Sheet sheet = workbook.getSheet(USERS_SHEET);
+            Row newRow = sheet.createRow(sheet.getLastRowNum() + 1);
+            newRow.createCell(0).setCellValue(newId);
+            newRow.createCell(1).setCellValue(password);
+            newRow.createCell(2).setCellValue(name);
+            newRow.createCell(3).setCellValue(role);
+            newRow.createCell(4).setCellValue(subject != null ? subject : "");
+
+            try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
+                workbook.write(fos);
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                try {
+                    workbook.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
             }
         }
 
+        // --- REMOVE USER (WRITE METHOD PATCHED) ---
         public static void removeUser(String id) {
-            try (FileInputStream fis = new FileInputStream(FILE_NAME); Workbook workbook = new XSSFWorkbook(fis)) {
-                Sheet sheet = workbook.getSheet(USERS_SHEET);
-                int rowToRemove = -1;
-                for (Row row : sheet) {
-                    if (row.getRowNum() == 0 || row.getCell(0) == null) {
-                        continue;
-                    }
-                    if (row.getCell(0).getStringCellValue().equalsIgnoreCase(id)) {
-                        rowToRemove = row.getRowNum();
-                        break;
-                    }
+            Workbook workbook;
+            try (FileInputStream fis = new FileInputStream(FILE_NAME)) {
+                workbook = new XSSFWorkbook(fis);
+            } catch (IOException e) {
+                e.printStackTrace();
+                return;
+            }
+
+            Sheet sheet = workbook.getSheet(USERS_SHEET);
+            int rowToRemove = -1;
+            for (Row row : sheet) {
+                if (row.getRowNum() == 0 || row.getCell(0) == null) {
+                    continue;
                 }
-                if (rowToRemove != -1) {
-                    Row foundRow = sheet.getRow(rowToRemove);
-                    if (foundRow != null) {
-                        sheet.removeRow(foundRow);
-                    }
-                    if (rowToRemove <= sheet.getLastRowNum()) {
-                        sheet.shiftRows(rowToRemove + 1, sheet.getLastRowNum(), -1);
-                    }
+                if (getStringValue(row.getCell(0), "").equalsIgnoreCase(id)) {
+                    rowToRemove = row.getRowNum();
+                    break;
                 }
+            }
+            if (rowToRemove != -1) {
+                Row foundRow = sheet.getRow(rowToRemove);
+                if (foundRow != null) {
+                    sheet.removeRow(foundRow);
+                }
+                if (rowToRemove <= sheet.getLastRowNum()) {
+                    sheet.shiftRows(rowToRemove + 1, sheet.getLastRowNum(), -1);
+                }
+
                 try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
                     workbook.write(fos);
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
+            }
+
+            try {
+                workbook.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
 
-        // NEW: Method to update a user's password
+        // --- UPDATE PASSWORD (WRITE METHOD PATCHED) ---
         public static void updatePassword(String userId, String newPassword) {
             File file = new File(FILE_NAME);
-            try (FileInputStream fis = new FileInputStream(file); Workbook workbook = new XSSFWorkbook(fis)) {
-                Sheet sheet = workbook.getSheet(USERS_SHEET);
-                boolean updated = false;
-                for (Row row : sheet) {
-                    if (row.getRowNum() == 0 || row.getCell(0) == null) {
-                        continue;
-                    }
+            Workbook workbook;
+            boolean updated = false;
 
-                    if (row.getCell(0).getStringCellValue().equalsIgnoreCase(userId)) {
-                        Cell passCell = row.getCell(1);
-                        if (passCell == null) {
-                            passCell = row.createCell(1);
-                        }
-                        passCell.setCellValue(newPassword);
-                        updated = true;
-                        break;
-                    }
-                }
+            try (FileInputStream fis = new FileInputStream(file)) {
+                workbook = new XSSFWorkbook(fis);
+            } catch (IOException e) {
+                e.printStackTrace();
+                return;
+            }
 
-                if (updated) {
-                    try (FileOutputStream fos = new FileOutputStream(file)) {
-                        workbook.write(fos);
-                    }
+            Sheet sheet = workbook.getSheet(USERS_SHEET);
+            for (Row row : sheet) {
+                if (row.getRowNum() == 0 || row.getCell(0) == null) {
+                    continue;
                 }
+                if (getStringValue(row.getCell(0), "").equalsIgnoreCase(userId)) {
+                    Cell passCell = row.getCell(1);
+                    if (passCell == null) {
+                        passCell = row.createCell(1);
+                    }
+                    passCell.setCellValue(newPassword);
+                    updated = true;
+                    break;
+                }
+            }
+
+            if (updated) {
+                try (FileOutputStream fos = new FileOutputStream(file)) {
+                    workbook.write(fos);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+
+            try {
+                workbook.close();
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
 
+        // --- These READ-ONLY methods are fine as-is ---
         public static List<User> getUsersByRole(String role) {
             List<User> users = new ArrayList<>();
             try (FileInputStream fis = new FileInputStream(FILE_NAME); Workbook workbook = new XSSFWorkbook(fis)) {
@@ -1582,14 +1834,9 @@ public class AttendanceSystemUI {
                     if (row.getRowNum() == 0 || row.getCell(3) == null) {
                         continue;
                     }
-
                     if (row.getCell(3).getStringCellValue().equalsIgnoreCase(role)) {
-                        String id = row.getCell(0).getStringCellValue();
-                        String name = row.getCell(2).getStringCellValue();
-                        String subject = "";
-                        if (role.equals("Staff") && row.getCell(4) != null) {
-                            subject = row.getCell(4).getStringCellValue();
-                        }
+                        String id = getStringValue(row.getCell(0), ""), name = getStringValue(row.getCell(2), "");
+                        String subject = getStringValue(row.getCell(4), "");
                         users.add(new User(id, "", name, role, subject));
                     }
                 }
@@ -1606,14 +1853,9 @@ public class AttendanceSystemUI {
                     if (row.getRowNum() == 0 || row.getCell(0) == null) {
                         continue;
                     }
-
-                    if (row.getCell(0).getStringCellValue().equalsIgnoreCase(userId)) {
-                        String name = row.getCell(2).getStringCellValue();
-                        String role = row.getCell(3).getStringCellValue();
-                        String subject = "";
-                        if (role.equals("Staff") && row.getCell(4) != null) {
-                            subject = row.getCell(4).getStringCellValue();
-                        }
+                    if (getStringValue(row.getCell(0), "").equalsIgnoreCase(userId)) {
+                        String name = getStringValue(row.getCell(2), ""), role = getStringValue(row.getCell(3), "");
+                        String subject = getStringValue(row.getCell(4), "");
                         return new User(userId, "", name, role, subject);
                     }
                 }
@@ -1630,24 +1872,12 @@ public class AttendanceSystemUI {
                 if (sheet == null) {
                     return records;
                 }
-
                 for (Row row : sheet) {
-                    if (row.getRowNum() == 0 || row.getCell(0) == null) {
+                    if (row.getRowNum() == 0 || row.getCell(0) == null || getStringValue(row.getCell(0), "").isEmpty()) {
                         continue;
                     }
-
-                    String subject = "General";
-                    Cell subjectCell = row.getCell(3);
-                    if (subjectCell != null && !subjectCell.getStringCellValue().isEmpty()) {
-                        subject = subjectCell.getStringCellValue();
-                    }
-
-                    records.add(new AttendanceRecord(
-                            row.getCell(0).getStringCellValue(),
-                            row.getCell(1).getStringCellValue(),
-                            row.getCell(2).getStringCellValue(),
-                            subject
-                    ));
+                    String subject = getStringValue(row.getCell(3), "General");
+                    records.add(new AttendanceRecord(getStringValue(row.getCell(0), ""), getStringValue(row.getCell(1), ""), getStringValue(row.getCell(2), ""), subject));
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -1655,39 +1885,33 @@ public class AttendanceSystemUI {
             return records;
         }
 
+        // ... other read-only calculation methods are fine ...
         public static List<AttendanceRecord> getAllAttendanceForToday() {
             String today = LocalDate.now().format(GLOBAL_DATE_FORMATTER);
-            return getAllAttendance().stream()
-                    .filter(r -> r.date.equals(today))
-                    .collect(Collectors.toList());
+            return getAllAttendance().stream().filter(r -> r.date.equals(today)).collect(Collectors.toList());
         }
 
         public static Map<String, Double> getOverallAttendanceForToday() {
-            List<AttendanceRecord> todayRecords = getAllAttendanceForToday();
-            return calculateStatsFromRecords(todayRecords);
+            return calculateStatsFromRecords(getAllAttendanceForToday());
         }
 
         public static Map<String, Double> getOverallAttendanceForToday(String subject) {
             List<AttendanceRecord> todayRecords = getAllAttendanceForToday().stream()
-                    .filter(r -> r.subject.equals(subject))
-                    .collect(Collectors.toList());
+                    .filter(r -> r.subject.equals(subject)).collect(Collectors.toList());
             return calculateStatsFromRecords(todayRecords);
         }
 
         private static Map<String, Double> calculateStatsFromRecords(List<AttendanceRecord> records) {
-            double present = 0;
-            double absent = 0;
+            double present = 0, absent = 0;
             for (AttendanceRecord r : records) {
                 if ("Present".equals(r.status)) {
-                    present++; 
-                }else {
+                    present++;
+                } else {
                     absent++;
                 }
             }
-
             double total = present + absent;
             double percentage = (total == 0) ? 100.0 : (present / total) * 100.0;
-
             Map<String, Double> stats = new HashMap<>();
             stats.put("present", present);
             stats.put("absent", absent);
@@ -1697,77 +1921,152 @@ public class AttendanceSystemUI {
         }
 
         public static List<AttendanceRecord> getAttendanceForStudent(String studentId) {
-            return getAllAttendance().stream()
-                    .filter(r -> r.studentId.equalsIgnoreCase(studentId))
-                    .sorted((r1, r2) -> r2.date.compareTo(r1.date)) // Sort by date, most recent first
-                    .collect(Collectors.toList());
+            return getAllAttendance().stream().filter(r -> r.studentId.equalsIgnoreCase(studentId))
+                    .sorted((r1, r2) -> r2.date.compareTo(r1.date)).collect(Collectors.toList());
         }
 
         public static boolean hasAttendanceBeenMarked(String dateStr, String subject) {
-            return getAllAttendance().stream()
-                    .anyMatch(r -> r.date.equals(dateStr) && r.subject.equals(subject));
+            return getAllAttendance().stream().anyMatch(r -> r.date.equals(dateStr) && r.subject.equals(subject));
         }
 
         public static String getStudentStatusForDate(String studentId, String dateStr, String subject) {
             return getAllAttendance().stream()
                     .filter(r -> r.date.equals(dateStr) && r.studentId.equals(studentId) && r.subject.equals(subject))
-                    .map(r -> r.status)
-                    .findFirst().orElse("Absent");
+                    .map(r -> r.status).findFirst().orElse("Absent");
         }
 
+        // --- MARK ATTENDANCE (WRITE METHOD PATCHED) ---
         public static void markAttendance(List<AttendanceRecord> records, String dateStr, String subject) {
-            try (FileInputStream fis = new FileInputStream(FILE_NAME); Workbook workbook = new XSSFWorkbook(fis)) {
-                Sheet sheet = workbook.getSheet(ATTENDANCE_SHEET);
-
-                List<Integer> rowsToRemove = new ArrayList<>();
-                for (Row row : sheet) {
-                    if (row.getRowNum() == 0) {
-                        continue;
-                    }
-
-                    Cell dateCell = row.getCell(1);
-                    Cell subjectCell = row.getCell(3);
-                    String rowDate = (dateCell != null) ? dateCell.getStringCellValue() : "";
-                    String rowSubject = (subjectCell != null && !subjectCell.getStringCellValue().isEmpty()) ? subjectCell.getStringCellValue() : "General";
-
-                    if (rowDate.equals(dateStr) && rowSubject.equals(subject)) {
-                        rowsToRemove.add(row.getRowNum());
-                    }
-                }
-
-                rowsToRemove.sort(Comparator.reverseOrder());
-                int removedCount = 0;
-                for (int rowIndex : rowsToRemove) {
-                    Row row = sheet.getRow(rowIndex);
-                    if (row != null) {
-                        sheet.removeRow(row);
-                        removedCount++;
-                    }
-                }
-
-                if (removedCount > 0) {
-                    int firstRowRemoved = rowsToRemove.get(rowsToRemove.size() - 1);
-                    int lastRowInSheet = sheet.getLastRowNum();
-                    if (firstRowRemoved <= lastRowInSheet) {
-                        sheet.shiftRows(firstRowRemoved + 1, lastRowInSheet + removedCount, -removedCount);
-                    }
-                }
-
-                int lastRow = sheet.getLastRowNum();
-                for (int i = 0; i < records.size(); i++) {
-                    AttendanceRecord record = records.get(i);
-                    Row newRow = sheet.createRow(lastRow + 1 + i);
-                    newRow.createCell(0).setCellValue(record.studentId);
-                    newRow.createCell(1).setCellValue(record.date);
-                    newRow.createCell(2).setCellValue(record.status);
-                    newRow.createCell(3).setCellValue(record.subject);
-                }
-
-                try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
-                    workbook.write(fos);
-                }
+            Workbook workbook;
+            try (FileInputStream fis = new FileInputStream(FILE_NAME)) {
+                workbook = new XSSFWorkbook(fis);
             } catch (IOException e) {
                 e.printStackTrace();
+                return;
+            }
+
+            Sheet sheet = workbook.getSheet(ATTENDANCE_SHEET);
+            List<Integer> rowsToRemove = new ArrayList<>();
+            for (Row row : sheet) {
+                if (row.getRowNum() == 0) {
+                    continue;
+                }
+                String rowDate = getStringValue(row.getCell(1), "");
+                String rowSubject = getStringValue(row.getCell(3), "General");
+                if (rowDate.equals(dateStr) && rowSubject.equals(subject)) {
+                    rowsToRemove.add(row.getRowNum());
+                }
+            }
+            rowsToRemove.sort(Comparator.reverseOrder());
+            int numRowsRemoved = 0;
+            for (int rowIndex : rowsToRemove) {
+                Row row = sheet.getRow(rowIndex);
+                if (row != null) {
+                    sheet.removeRow(row);
+                    numRowsRemoved++;
+                }
+            }
+            if (numRowsRemoved > 0 && !rowsToRemove.isEmpty()) {
+                int firstRowRemoved = rowsToRemove.get(rowsToRemove.size() - 1);
+                if (firstRowRemoved + numRowsRemoved <= sheet.getLastRowNum()) {
+                    sheet.shiftRows(firstRowRemoved + numRowsRemoved, sheet.getLastRowNum(), -numRowsRemoved, true, false);
+                }
+            }
+
+            int lastRow = sheet.getLastRowNum();
+            for (int i = 0; i < records.size(); i++) {
+                Row newRow = sheet.createRow(lastRow + 1 + i);
+                AttendanceRecord record = records.get(i);
+                newRow.createCell(0).setCellValue(record.studentId);
+                newRow.createCell(1).setCellValue(record.date);
+                newRow.createCell(2).setCellValue(record.status);
+                newRow.createCell(3).setCellValue(record.subject);
+            }
+
+            try (FileOutputStream fos = new FileOutputStream(FILE_NAME)) {
+                workbook.write(fos);
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                try {
+                    workbook.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        // --- UPDATE SINGLE RECORD (WRITE METHOD PATCHED) ---
+        public static void updateSingleAttendanceRecord(String studentId, String date, String subject, String newStatus) {
+            File file = new File(FILE_NAME);
+            Workbook workbook;
+            boolean updated = false;
+
+            try (FileInputStream fis = new FileInputStream(file)) {
+                workbook = new XSSFWorkbook(fis);
+            } catch (Exception e) {
+                e.printStackTrace();
+                return;
+            }
+
+            Sheet sheet = workbook.getSheet(ATTENDANCE_SHEET);
+            for (Row row : sheet) {
+                if (row.getRowNum() == 0) {
+                    continue;
+                }
+                if (getStringValue(row.getCell(0), "").equals(studentId)
+                        && getStringValue(row.getCell(1), "").equals(date)
+                        && getStringValue(row.getCell(3), "General").equals(subject)) {
+                    Cell statusCell = row.getCell(2);
+                    if (statusCell == null) {
+                        statusCell = row.createCell(2);
+                    }
+                    statusCell.setCellValue(newStatus);
+                    updated = true;
+                    break;
+                }
+            }
+
+            if (updated) {
+                try (FileOutputStream fos = new FileOutputStream(file)) {
+                    workbook.write(fos);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+
+            try {
+                workbook.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // --- This is the essential helper method ---
+        private static String getStringValue(Cell cell, String defaultValue) {
+            if (cell == null) {
+                return defaultValue;
+            }
+            try {
+                String val = cell.getStringCellValue();
+                return (val == null || val.isEmpty()) ? defaultValue : val;
+            } catch (Exception e) {
+                try {
+                    // Try to read as a number and convert to string
+                    return String.valueOf((long) cell.getNumericCellValue());
+                } catch (Exception e2) {
+                    try {
+                        // Handle formula cells that result in strings
+                        return cell.getRichStringCellValue().getString();
+                    } catch (Exception e3) {
+                        try {
+                            // Handle formula cells that result in numbers
+                            return String.valueOf((long) cell.getNumericCellValue());
+                        } catch (Exception e4) {
+                            return defaultValue;
+                        }
+                    }
+                }
             }
         }
     }
